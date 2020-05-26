@@ -1,0 +1,107 @@
+pipeline {
+    agent 'any'
+        stages()
+        {
+         stage ('checkout')
+         {
+             steps{
+                  checkout([$class: 'GitSCM', branches: [[name: '*/master']],
+                  doGenerateSubmoduleConfigurations: false, 
+                  extensions: [], 
+                  submoduleCfg: [], 
+                 userRemoteConfigs: [[url: 'https://github.com/wellsfargo123/hello-world-1.git']]])
+                }
+            
+         }
+         stage ('build')
+         {
+             steps {
+                 sh 'java -version'
+                 sh 'mvn --version'
+                 sh 'cd /var/lib/jenkins/workspace/pipeline_project; mvn clean package' 
+             }
+             
+         }
+         stage ('Junit')
+         {
+             steps {
+                 sh 'cd /var/lib/jenkins/workspace/pipeline_project; mvn test'
+                 //junit '/server/target/surefire-reports/*.xml'
+                 junit allowEmptyResults: true, testResults: '/server/target/surefire-reports/*.xml'
+                }
+         }
+         stage ('code coverage')
+         {
+             steps {
+                 sh 'cd /var/lib/jenkins/workspace/pipeline_project; mvn cobertura:cobertura'
+                 //cobertura coberturaReportFile: '/var/lib/jenkins/workspace/pipeline_project/server/target/cobertura/coverage.xml'
+             }
+         }
+          stage('sonarqube') {
+            environment {
+                scannerHome = tool 'SonarQubeRunner'
+            }
+                steps {
+                    withSonarQubeEnv('sonarqube') {
+                        sh 'mvn sonar:sonar -X'
+                        //sh "${scannerHome}/bin/sonar-runner"
+                        sh '/opt/sonar-runner-2.4/bin/sonar-runner'
+                    }
+                    //timeout(time: 5000, unit: 'MINUTES') {
+                       // waitForQualityGate abortPipeline: false
+                    //}
+                }
+            }
+            stage('archiving artifacts')
+            {
+                   steps {
+                    sh 'pwd'
+                    sh 'cd /var/lib/jenkins/workspace/pipeline_project/webapp/target'
+                    sh 'zip -r /var/lib/jenkins/workspace/pipeline_project/webapp/target/webapp.zip . -i webapp.war'
+                }
+            }
+            stage('Jfrog Artifactory')
+            {
+                steps {
+                    rtServer (
+                        id: 'artifactory',
+                        url: 'http://35.223.218.69:8082/artifactory/',
+                        username: 'admin',
+                        password: 'admin@123'
+                        //bypassProxy: true
+                        //timeout = 300
+                    )    
+                }
+            }
+            stage('Artifact Upload')
+            {
+                steps {
+                    rtUpload (
+                        serverId: 'jfrog',
+                        spec: '''{
+                              "files": [
+                                {
+                                   "pattern": "webapp/target/webapp.war",
+                                   "target": "Jenkins-snapshot/"
+                                }
+                            ]
+                        }'''
+					)
+                }
+                
+                
+            }
+            stage('artifact uploading')
+            {
+                steps {
+                    nexusArtifactUploader artifacts: [[artifactId: 'webapp', classifier: '', file: '/var/lib/jenkins/workspace/pipeline_project/webapp/target/webapp.war', type: 'war']], credentialsId: 'nexus_new', groupId: 'com.example.maven-project', nexusUrl: '35.222.129.227:8081/', nexusVersion: 'nexus3', protocol: 'http', repository: 'maven-snapshots', version: '1.0-SNAPSHOT'
+                }
+           }
+           stage('Deploy to Tomcat')
+           {
+               steps {
+                  deploy adapters: [tomcat7(credentialsId: 'tomcat', path: '', url: 'http://34.93.214.56:8080/')], contextPath: null, onFailure: false, war: '**/*.war'
+               }
+           }
+        }
+    }
